@@ -2,153 +2,332 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>Phigros Web Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phigros Level 16 Simulation Demo</title>
     <style>
         body {
             margin: 0;
             background-color: #000;
             overflow: hidden;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            font-family: sans-serif;
+            color: white;
+            font-family: 'Arial', sans-serif;
+            user-select: none;
         }
-        canvas {
-            border: 2px solid #333;
-            box-shadow: 0 0 20px rgba(255,255,255,0.1);
+
+        /* 游戏画布 */
+        #gameCanvas {
+            display: block;
         }
-        #ui {
+
+        /* UI 容器 */
+        #ui-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* 让点击穿透UI */
+            z-index: 10;
+        }
+
+        /* 分数 (左上角) */
+        #score-display {
             position: absolute;
             top: 20px;
-            color: white;
-            pointer-events: none;
+            left: 20px;
+            font-size: 24px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+
+        /* Combo (底部中央) */
+        #combo-container {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
             text-align: center;
+        }
+
+        #combo-count {
+            font-size: 64px;
+            font-weight: 900;
+            line-height: 1;
+            background: linear-gradient(to bottom, #fff, #aaa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 15px rgba(255, 255, 255, 0.4);
+        }
+
+        #combo-label {
+            font-size: 14px;
+            letter-spacing: 4px;
+            color: #ccc;
+            margin-top: -5px;
         }
     </style>
 </head>
 <body>
 
-<div id="ui">
-    <div id="score">Score: 0000000</div>
-    <div id="combo">0</div>
-</div>
-<canvas id="gameCanvas"></canvas>
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="ui-container">
+        <div id="score-display">0000000</div>
+        
+        <div id="combo-container">
+            <div id="combo-count">0</div>
+            <div id="combo-label">COMBO</div>
+        </div>
+    </div>
 
 <script>
 /**
- * Phigros 核心逻辑模拟
+ * Phigros Lv.16 Simulation - Core Logic
  */
+
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
-const scoreEl = document.getElementById('score');
-const comboEl = document.getElementById('combo');
+const scoreEl = document.getElementById('score-display');
+const comboEl = document.getElementById('combo-count');
 
-// 配置参数
-const config = {
-    width: 800,
-    height: 600,
-    lineY: 300, // 判定线初始位置 (垂直居中)
-    noteWidth: 80,
-    noteHeight: 10,
-    speed: 5    // 下落速度
+// --- 配置 ---
+let width, height;
+const NOTE_TYPES = { TAP: 0, DRAG: 1, HOLD: 2, FLICK: 3 };
+const JUDGE_LINE_COLOR = '#fff';
+
+// LV.16 难度参数
+const CONFIG = {
+    noteSpeed: 8,           // 音符下落速度 (16级通常很快)
+    noteSpawnRate: 0.96,    // 生成概率 (0-1)，越接近1越密
+    lineRotateSpeed: 0.015, // 判定线旋转速度
 };
 
-canvas.width = config.width;
-canvas.height = config.height;
+// 判定颜色配置
+const COLORS = {
+    [NOTE_TYPES.TAP]:   { main: '#00ccff', glow: '#00ffff' }, // 蓝
+    [NOTE_TYPES.DRAG]:  { main: '#ffcc00', glow: '#ffff00' }, // 黄
+    [NOTE_TYPES.HOLD]:  { main: '#ffcc00', glow: '#ffff00' }, // 黄 (长条)
+    [NOTE_TYPES.FLICK]: { main: '#ff3366', glow: '#ffccff' }  // 红
+};
 
+// --- 游戏状态 ---
 let score = 0;
 let combo = 0;
 let notes = [];
 let frameCount = 0;
 
-// 音符类
+// 判定线状态 (中心点在屏幕中央)
+let judgeLine = {
+    x: 0, 
+    y: 0,
+    angle: 0, // 弧度
+    length: 0
+};
+
+// --- 初始化 ---
+function init() {
+    resize();
+    window.addEventListener('resize', resize);
+    
+    // 初始化判定线
+    judgeLine.x = width / 2;
+    judgeLine.y = height / 2;
+    judgeLine.length = Math.max(width, height) * 0.8;
+
+    gameLoop();
+}
+
+function resize() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+    judgeLine.x = width / 2;
+    judgeLine.y = height / 2;
+}
+
+// --- 音符类 ---
 class Note {
-    constructor(side) {
-        this.side = side; // 1 从上往下, -1 从下往上
-        this.x = Math.random() * (config.width - config.noteWidth);
-        this.y = side === 1 ? -20 : config.height + 20;
+    constructor(type) {
+        this.type = type;
+        this.id = Date.now() + Math.random();
+        
+        // 相对于判定线的坐标
+        // random posX: -0.5 到 0.5
+        this.posX = (Math.random() - 0.5) * judgeLine.length * 0.8; 
+        
+        // 初始下落距离 (从屏幕边缘外开始)
+        this.distance = Math.max(width, height); 
+        
         this.active = true;
+        
+        // Hold 特有属性
+        if (type === NOTE_TYPES.HOLD) {
+            this.holdLength = 150 + Math.random() * 200; // 长条长度
+        }
     }
 
     update() {
-        this.y += config.speed * this.side;
-        
-        // 判定逻辑：当音符接触判定线
-        if (this.active) {
-            const hitZone = Math.abs(this.y - config.lineY);
-            if (hitZone < 10) {
-                this.hit();
-            }
-        }
+        if (!this.active) return;
 
-        // 移出屏幕
-        if (this.y > config.height + 50 || this.y < -50) {
-            if (this.active) combo = 0; // Miss
+        // 向判定线移动
+        this.distance -= CONFIG.noteSpeed;
+
+        // Phigros 判定逻辑: 触碰即判定 (为了演示LV16的自动击打)
+        if (this.distance <= 0) {
+            this.hit();
+        }
+        
+        // Hold 判定逻辑: 尾部通过判定线
+        if (this.type === NOTE_TYPES.HOLD && (this.distance + this.holdLength) < 0) {
             this.active = false;
         }
     }
 
     draw() {
-        if (!this.active) return;
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(this.x, this.y, config.noteWidth, config.noteHeight);
+        if (!this.active && this.type !== NOTE_TYPES.HOLD) return;
+
+        ctx.save();
+        
+        // 1. 移动画布到判定线中心并旋转
+        ctx.translate(judgeLine.x, judgeLine.y);
+        ctx.rotate(judgeLine.angle);
+
+        // 2. 绘制音符 (相对于判定线坐标)
+        const renderX = this.posX;
+        const renderY = -this.distance; // 负值表示在判定线上方下落
+
+        const color = COLORS[this.type];
+        ctx.fillStyle = color.main;
         
         // 发光效果
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = '#00ffff';
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = color.glow;
+
+        const nw = 70; // Note Width
+        const nh = 12; // Note Height
+
+        switch (this.type) {
+            case NOTE_TYPES.TAP:
+                // 蓝 Tap
+                ctx.fillRect(renderX - nw/2, renderY - nh/2, nw, nh);
+                break;
+            case NOTE_TYPES.DRAG:
+                // 黄 Drag (小一点)
+                ctx.fillRect(renderX - nw/2, renderY - 8/2, nw, 8);
+                break;
+            case NOTE_TYPES.FLICK:
+                // 红 Flick
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(renderX - nw/2, renderY - 14/2, nw, 14);
+                ctx.fillStyle = color.main;
+                ctx.fillRect(renderX - (nw-8)/2, renderY - 10/2, nw-8, 10);
+                break;
+            case NOTE_TYPES.HOLD:
+                // 黄 Hold
+                if (this.distance > 0) {
+                    // 头部还没到
+                    ctx.fillRect(renderX - nw/2, renderY, nw, this.holdLength);
+                } else {
+                    // 正在Hold中
+                    ctx.fillRect(renderX - nw/2, 0, nw, this.holdLength + this.distance);
+                }
+                break;
+        }
+
+        ctx.restore();
     }
 
     hit() {
-        this.active = false;
-        score += 100;
+        if (this.type === NOTE_TYPES.HOLD) {
+            // Hold 只增加 Combo，直到结束才设置 active=false
+            if (this.distance <= 0 && this.distance > -CONFIG.noteSpeed) {
+                 this.addCombo();
+            }
+        } else {
+            this.active = false;
+            this.addCombo();
+        }
+    }
+
+    addCombo() {
         combo++;
+        // 简化的分数计算 (LV16通常全Perfect才能有高分)
+        score += 1000; 
         updateUI();
     }
 }
 
+// --- UI 更新 ---
 function updateUI() {
-    scoreEl.innerText = `Score: ${score.toString().padStart(7, '0')}`;
+    // 格式化分数 (7位，前面补0)
+    scoreEl.innerText = score.toString().padStart(7, '0');
     comboEl.innerText = combo;
 }
 
-// 渲染循环
-function gameLoop() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+// --- 生成谱面 (Lv.16 模拟) ---
+function spawnNotes() {
+    // LV16: 极高的生成率和多音符同时出现
+    if (Math.random() < CONFIG.noteSpawnRate) {
+        
+        // 随机选择音符类型
+        let typeRand = Math.random();
+        let type;
+        if (typeRand < 0.6) type = NOTE_TYPES.TAP;
+        else if (typeRand < 0.8) type = NOTE_TYPES.DRAG;
+        else if (typeRand < 0.9) type = NOTE_TYPES.FLICK;
+        else type = NOTE_TYPES.HOLD;
 
-    // 1. 绘制判定线 (Phigros 的灵魂)
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(0, config.lineY);
-    ctx.lineTo(config.width, config.lineY);
-    ctx.stroke();
-
-    // 2. 生成随机音符
-    if (frameCount % 60 === 0) {
-        notes.push(new Note(Math.random() > 0.5 ? 1 : -1));
-    }
-
-    // 3. 更新和绘制音符
-    notes.forEach((note, index) => {
-        note.update();
-        note.draw();
-        if (!note.active && (note.y > config.height || note.y < 0)) {
-            notes.splice(index, 1);
+        notes.push(new Note(type));
+        
+        // LV16 特征: 双击 (同时生成两个)
+        if (Math.random() < 0.4) {
+             notes.push(new Note(Math.random() > 0.5 ? NOTE_TYPES.TAP : NOTE_TYPES.FLICK));
         }
-    });
+    }
+}
+
+// --- 游戏主循环 ---
+function gameLoop() {
+    ctx.clearRect(0, 0, width, height);
+
+    // 1. 动态更新判定线 (旋转)
+    judgeLine.angle += CONFIG.lineRotateSpeed;
+    
+    // 绘制判定线
+    ctx.save();
+    ctx.translate(judgeLine.x, judgeLine.y);
+    ctx.rotate(judgeLine.angle);
+    ctx.strokeStyle = JUDGE_LINE_COLOR;
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = 'rgba(255,255,255,0.8)';
+    ctx.beginPath();
+    ctx.moveTo(-judgeLine.length / 2, 0);
+    ctx.lineTo(judgeLine.length / 2, 0);
+    ctx.stroke();
+    ctx.restore();
+
+    // 2. 生成新音符
+    spawnNotes();
+
+    // 3. 更新和绘制所有音符
+    for (let i = notes.length - 1; i >= 0; i--) {
+        notes[i].update();
+        notes[i].draw();
+        
+        // 移除不活跃的音符
+        if (!notes[i].active && notes[i].type !== NOTE_TYPES.HOLD) {
+            notes.splice(i, 1);
+        }
+    }
 
     frameCount++;
     requestAnimationFrame(gameLoop);
 }
 
-// 点击/触摸反馈
-window.addEventListener('mousedown', (e) => {
-    // 这里可以添加手动点击判定的代码
-    // 简化版：Phigros 许多音符是自动判定的，这里主要模拟视觉
-});
+// 启动
+init();
 
-gameLoop();
 </script>
 </body>
 </html>
