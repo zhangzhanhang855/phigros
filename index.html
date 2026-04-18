@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Phigros Web Demo</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: sans-serif;
+        }
+        canvas {
+            border: 2px solid #333;
+            box-shadow: 0 0 20px rgba(255,255,255,0.1);
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            color: white;
+            pointer-events: none;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <div id="score">Score: 0000000</div>
+    <div id="combo">0</div>
+</div>
+<canvas id="gameCanvas"></canvas>
+
+<script>
+/**
+ * Phigros 核心逻辑模拟
+ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const comboEl = document.getElementById('combo');
+
+// 配置参数
+const config = {
+    width: 800,
+    height: 600,
+    lineY: 300, // 判定线初始位置 (垂直居中)
+    noteWidth: 80,
+    noteHeight: 10,
+    speed: 5    // 下落速度
+};
+
+canvas.width = config.width;
+canvas.height = config.height;
+
+let score = 0;
+let combo = 0;
+let notes = [];
+let frameCount = 0;
+
+// 音符类
+class Note {
+    constructor(side) {
+        this.side = side; // 1 从上往下, -1 从下往上
+        this.x = Math.random() * (config.width - config.noteWidth);
+        this.y = side === 1 ? -20 : config.height + 20;
+        this.active = true;
+    }
+
+    update() {
+        this.y += config.speed * this.side;
+        
+        // 判定逻辑：当音符接触判定线
+        if (this.active) {
+            const hitZone = Math.abs(this.y - config.lineY);
+            if (hitZone < 10) {
+                this.hit();
+            }
+        }
+
+        // 移出屏幕
+        if (this.y > config.height + 50 || this.y < -50) {
+            if (this.active) combo = 0; // Miss
+            this.active = false;
+        }
+    }
+
+    draw() {
+        if (!this.active) return;
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(this.x, this.y, config.noteWidth, config.noteHeight);
+        
+        // 发光效果
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#00ffff';
+    }
+
+    hit() {
+        this.active = false;
+        score += 100;
+        combo++;
+        updateUI();
+    }
+}
+
+function updateUI() {
+    scoreEl.innerText = `Score: ${score.toString().padStart(7, '0')}`;
+    comboEl.innerText = combo;
+}
+
+// 渲染循环
+function gameLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1. 绘制判定线 (Phigros 的灵魂)
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, config.lineY);
+    ctx.lineTo(config.width, config.lineY);
+    ctx.stroke();
+
+    // 2. 生成随机音符
+    if (frameCount % 60 === 0) {
+        notes.push(new Note(Math.random() > 0.5 ? 1 : -1));
+    }
+
+    // 3. 更新和绘制音符
+    notes.forEach((note, index) => {
+        note.update();
+        note.draw();
+        if (!note.active && (note.y > config.height || note.y < 0)) {
+            notes.splice(index, 1);
+        }
+    });
+
+    frameCount++;
+    requestAnimationFrame(gameLoop);
+}
+
+// 点击/触摸反馈
+window.addEventListener('mousedown', (e) => {
+    // 这里可以添加手动点击判定的代码
+    // 简化版：Phigros 许多音符是自动判定的，这里主要模拟视觉
+});
+
+gameLoop();
+</script>
+</body>
+</html>
